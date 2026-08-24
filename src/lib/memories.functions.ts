@@ -129,7 +129,7 @@ export const addMemory = createServerFn({ method: "POST" })
   });
 
 export const deleteMemory = createServerFn({ method: "POST" })
-  .validator((data: { id: string }) => z.object({ id: z.string().uuid() }).parse(data))
+  .validator((data: { id: string }) => z.object({ id: z.string().min(1) }).parse(data))
   .handler(async ({ data }) => {
     const { deleteMemoryHandler } = await import("./memories.server");
     return deleteMemoryHandler(data.id);

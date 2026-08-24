@@ -139,7 +139,7 @@ export const adminAddOfflineEntries = createServerFn({ method: "POST" })
   });
 
 export const adminDeleteMemory = createServerFn({ method: "POST" })
-  .validator((data: { id: string }) => z.object({ id: z.string().uuid() }).parse(data))
+  .validator((data: { id: string }) => z.object({ id: z.string().min(1) }).parse(data))
   .handler(async ({ data }) => {
     const { requireAdmin } = await import("./admin.server");
     await requireAdmin();

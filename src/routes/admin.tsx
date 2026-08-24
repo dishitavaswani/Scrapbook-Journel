@@ -1,6 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useServerFn } from "@tanstack/react-start";
 import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
+import { supabase } from "@/integrations/supabase/client";
 import {
   adminAddOfflineEntries,
   adminDeleteEntry,
@@ -368,40 +369,79 @@ function Admin() {
 
       {/* Photo Gallery Management */}
       <section className="mt-14 mb-10">
-        <p className="eyebrow">Scrapbook Photos ({memories.length})</p>
-        <div className="mt-4 grid grid-cols-2 gap-4 sm:grid-cols-3">
-          {memories.map((m) => (
-            <figure key={m.id} className="paper hairline rounded-sm p-3 flex flex-col justify-between">
-              <div>
-                {m.url ? (
-                  <img src={m.url} alt={m.caption} className="w-full h-36 rounded-sm object-cover bg-muted/20" />
-                ) : (
-                  <div className="w-full h-36 rounded-sm bg-muted/30 flex items-center justify-center text-xs text-muted-foreground italic">
-                    Photo unavailable
-                  </div>
-                )}
-                <figcaption className="px-1 pt-2 text-xs text-ink font-serif line-clamp-2">“{m.caption}”</figcaption>
-                {m.addedBy && <p className="px-1 text-[0.65rem] text-muted-foreground">— {m.addedBy}</p>}
-              </div>
-              <div className="mt-3 pt-2 border-t border-border/40 flex justify-end">
-                <button
-                  className="text-[0.65rem] uppercase tracking-[0.2em] text-muted-foreground hover:text-destructive cursor-pointer"
-                  onClick={async () => {
-                    setMemories((prev) => prev.filter((item) => item.id !== m.id));
-                    try {
-                      await deleteMemory({ data: { id: m.id } });
-                    } catch (err) {
-                      console.error("[Admin] Delete memory error:", err);
-                    }
-                    void load();
-                  }}
-                >
-                  Remove
-                </button>
-              </div>
-            </figure>
-          ))}
+        <div className="flex items-center justify-between">
+          <p className="eyebrow">Scrapbook Photos ({memories.length})</p>
+          {memories.length > 0 && (
+            <button
+              type="button"
+              onClick={async () => {
+                if (!confirm("Are you sure you want to delete ALL photos from the gallery?")) return;
+                setMemories([]);
+                try {
+                  await supabase.from("memories").delete().neq("id", "00000000-0000-0000-0000-000000000000");
+                } catch (err) {
+                  console.warn("Direct purge error:", err);
+                }
+                for (const m of memories) {
+                  try {
+                    await deleteMemory({ data: { id: m.id } });
+                  } catch {
+                    // Ignore
+                  }
+                }
+                void load();
+              }}
+              className="text-xs uppercase tracking-[0.2em] text-destructive hover:underline cursor-pointer"
+            >
+              Clear All Photos
+            </button>
+          )}
         </div>
+
+        {memories.length === 0 ? (
+          <div className="paper hairline mt-4 rounded-sm p-6 text-center text-xs text-muted-foreground italic">
+            No photos in the scrapbook yet.
+          </div>
+        ) : (
+          <div className="mt-4 grid grid-cols-2 gap-4 sm:grid-cols-3">
+            {memories.map((m) => (
+              <figure key={m.id} className="paper hairline rounded-sm p-3 flex flex-col justify-between">
+                <div>
+                  {m.url ? (
+                    <img src={m.url} alt={m.caption} className="w-full h-36 rounded-sm object-cover bg-muted/20" />
+                  ) : (
+                    <div className="w-full h-36 rounded-sm bg-muted/30 flex items-center justify-center text-xs text-muted-foreground italic">
+                      Photo unavailable
+                    </div>
+                  )}
+                  <figcaption className="px-1 pt-2 text-xs text-ink font-serif line-clamp-2">“{m.caption}”</figcaption>
+                  {m.addedBy && <p className="px-1 text-[0.65rem] text-muted-foreground">— {m.addedBy}</p>}
+                </div>
+                <div className="mt-3 pt-2 border-t border-border/40 flex justify-end">
+                  <button
+                    className="text-[0.65rem] uppercase tracking-[0.2em] text-destructive font-semibold hover:opacity-80 cursor-pointer"
+                    onClick={async () => {
+                      setMemories((prev) => prev.filter((item) => item.id !== m.id));
+                      try {
+                        await supabase.from("memories").delete().eq("id", m.id);
+                      } catch (err) {
+                        console.warn("[Admin] Direct Supabase delete note:", err);
+                      }
+                      try {
+                        await deleteMemory({ data: { id: m.id } });
+                      } catch (err) {
+                        console.warn("[Admin] Server delete error:", err);
+                      }
+                      void load();
+                    }}
+                  >
+                    Remove ✕
+                  </button>
+                </div>
+              </figure>
+            ))}
+          </div>
+        )}
       </section>
     </main>
   );
