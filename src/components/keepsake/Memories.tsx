@@ -239,73 +239,71 @@ export function Memories() {
       </form>
 
       {/* Scrapbook Gallery Grid */}
-      {items.length > 0 ? (
-        <div className="mt-14 columns-1 gap-6 sm:columns-2 lg:columns-3">
-          {items.map((m) => {
-            const isBroken = !m.url || brokenImages[m.id];
-            return (
-              <figure
-                key={m.id}
-                className="paper hairline mb-6 break-inside-avoid rounded-sm p-3.5 transition-all duration-300 hover:scale-[1.02] group shadow-sm hover:shadow-md relative"
-              >
-                {!isBroken && m.url ? (
+      {(() => {
+        const visibleItems = items.filter((m) => m.url && !brokenImages[m.id]);
+        if (visibleItems.length > 0) {
+          return (
+            <div className="mt-14 columns-1 gap-6 sm:columns-2 lg:columns-3">
+              {visibleItems.map((m) => (
+                <figure
+                  key={m.id}
+                  className="paper hairline mb-6 break-inside-avoid rounded-sm p-3.5 transition-all duration-300 hover:scale-[1.02] group shadow-sm hover:shadow-md relative"
+                >
                   <div
                     onClick={() => setLightbox(m)}
                     className="overflow-hidden rounded-sm bg-muted/20 cursor-pointer"
                   >
                     <img
-                      src={m.url}
+                      src={m.url!}
                       alt={m.caption}
                       loading="lazy"
                       onError={() => {
-                        console.warn("[Memories] Photo unavailable at storage path:", m.storagePath);
+                        console.warn("[Memories] Photo unavailable, hiding broken item:", m.id);
                         setBrokenImages((prev) => ({ ...prev, [m.id]: true }));
                       }}
                       className="w-full rounded-sm object-cover transition-transform duration-500 group-hover:scale-105"
                     />
                   </div>
-                ) : (
-                  <div className="flex h-32 w-full items-center justify-center rounded-sm bg-muted/30 border border-dashed border-input/60 text-center p-4">
-                    <p className="font-serif text-xs text-muted-foreground italic">Photo unavailable</p>
-                  </div>
-                )}
 
-                <figcaption className="px-1.5 pt-3.5 pb-1">
-                  <p className="font-serif text-base leading-snug text-ink line-clamp-3">“{m.caption}”</p>
-                  <div className="mt-3 flex items-center justify-between gap-2 border-t border-border/40 pt-2">
-                    <p className="eyebrow text-gold/90 text-[0.65rem] font-medium tracking-[0.2em]">
-                      {m.addedBy ? `— ${m.addedBy}` : "— Keepsake"}
-                    </p>
+                  <figcaption className="px-1.5 pt-3.5 pb-1">
+                    <p className="font-serif text-base leading-snug text-ink line-clamp-3">“{m.caption}”</p>
+                    <div className="mt-3 flex items-center justify-between gap-2 border-t border-border/40 pt-2">
+                      <p className="eyebrow text-gold/90 text-[0.65rem] font-medium tracking-[0.2em]">
+                        {m.addedBy ? `— ${m.addedBy}` : "— Keepsake"}
+                      </p>
 
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setDeleteError(null);
-                        setMemoryToDelete(m);
-                      }}
-                      className="text-[0.65rem] tracking-[0.16em] uppercase text-muted-foreground/60 hover:text-destructive transition-colors opacity-70 group-hover:opacity-100 cursor-pointer"
-                      title="Remove memory"
-                    >
-                      Remove
-                    </button>
-                  </div>
-                </figcaption>
-              </figure>
-            );
-          })}
-        </div>
-      ) : (
-        /* Empty State */
-        <div className="paper hairline mx-auto mt-14 max-w-md rounded-sm p-10 text-center">
-          <span className="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-muted/60 text-gold text-lg">
-            ✦
-          </span>
-          <h3 className="mt-4 font-serif text-2xl text-ink">Pages waiting to be filled</h3>
-          <p className="mt-2 text-sm text-muted-foreground italic">
-            Add the first memory to her scrapbook above.
-          </p>
-        </div>
-      )}
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setDeleteError(null);
+                          setMemoryToDelete(m);
+                        }}
+                        className="text-[0.65rem] tracking-[0.16em] uppercase text-muted-foreground/60 hover:text-destructive transition-colors opacity-70 group-hover:opacity-100 cursor-pointer"
+                        title="Remove memory"
+                      >
+                        Remove
+                      </button>
+                    </div>
+                  </figcaption>
+                </figure>
+              ))}
+            </div>
+          );
+        }
+
+        return (
+          /* Empty State */
+          <div className="paper hairline mx-auto mt-14 max-w-md rounded-sm p-10 text-center">
+            <span className="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-muted/60 text-gold text-lg">
+              ✦
+            </span>
+            <h3 className="mt-4 font-serif text-2xl text-ink">Pages waiting to be filled</h3>
+            <p className="mt-2 text-sm text-muted-foreground italic">
+              Add the first memory to her scrapbook above.
+            </p>
+          </div>
+        );
+      })()}
 
       {/* Full Photo Lightbox Modal */}
       {lightbox?.url && !brokenImages[lightbox.id] && (

@@ -91,7 +91,7 @@ export function deleteLocalMemoryFile(filename: string) {
 
 export async function deleteMemoryHandler(id: string) {
   console.log("[deleteMemoryHandler] Executing delete for ID:", id);
-  // 1. Mark as deleted so it can never be fetched again
+  // 1. Mark as deleted in local blacklist
   addDeletedMemoryId(id);
 
   // 2. Remove from local memories JSON
@@ -105,14 +105,26 @@ export async function deleteMemoryHandler(id: string) {
     deleteLocalMemoryFile(target.storagePath);
   }
 
-  // 4. Try remote delete (Supabase) if possible
+  // 4. Delete from Supabase Database & Storage
   try {
     if (target?.storagePath) {
       await supabase.storage.from("memories").remove([target.storagePath]);
     }
     await supabase.from("memories").delete().eq("id", id);
   } catch (err) {
-    console.warn("[deleteMemoryHandler] Supabase remote delete warning:", err);
+    console.warn("[deleteMemoryHandler] Supabase remote delete note:", err);
+  }
+
+  try {
+    if (process.env["SUPABASE_SERVICE_ROLE_KEY"]) {
+      const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+      if (target?.storagePath) {
+        await supabaseAdmin.storage.from("memories").remove([target.storagePath]);
+      }
+      await supabaseAdmin.from("memories").delete().eq("id", id);
+    }
+  } catch {
+    // Ignore service role fallback
   }
 
   return { ok: true as const, id };

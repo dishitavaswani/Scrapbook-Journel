@@ -83,7 +83,35 @@ export const addMemory = createServerFn({ method: "POST" })
     // Save image binary directly to local storage
     const buffer = saveLocalMemoryFile(storageFilename, data.fileBase64);
 
-    const publicUrl = `/memories/${storageFilename}`;
+    let publicUrl = `/memories/${storageFilename}`;
+
+    // Upload to Supabase Storage and database
+    try {
+      const mime = ext === "png" ? "image/png" : ext === "webp" ? "image/webp" : "image/jpeg";
+      const { data: uploadRes, error: uploadErr } = await supabase.storage
+        .from("memories")
+        .upload(storageFilename, buffer, {
+          contentType: mime,
+          upsert: true,
+        });
+
+      if (!uploadErr && uploadRes) {
+        const { data: pubData } = supabase.storage.from("memories").getPublicUrl(storageFilename);
+        if (pubData?.publicUrl) {
+          publicUrl = pubData.publicUrl;
+        }
+      }
+
+      await supabase.from("memories").insert({
+        id,
+        storage_path: storageFilename,
+        caption: data.caption,
+        added_by: data.addedBy || null,
+      });
+    } catch (syncErr) {
+      console.warn("[addMemory] Supabase storage sync note:", syncErr);
+    }
+
     const newMemory = {
       id,
       storagePath: storageFilename,
@@ -96,22 +124,6 @@ export const addMemory = createServerFn({ method: "POST" })
     const localList = readLocalMemories();
     localList.unshift(newMemory);
     writeLocalMemories(localList);
-
-    // Optional background sync with Supabase
-    try {
-      await supabase.storage.from("memories").upload(storageFilename, buffer, {
-        contentType: `image/${ext === "png" ? "png" : ext === "webp" ? "webp" : "jpeg"}`,
-        upsert: true,
-      });
-      await supabase.from("memories").insert({
-        id,
-        storage_path: storageFilename,
-        caption: data.caption,
-        added_by: data.addedBy || null,
-      });
-    } catch (syncErr) {
-      console.warn("[addMemory] Supabase background sync note:", syncErr);
-    }
 
     return { ok: true as const, memory: newMemory };
   });
