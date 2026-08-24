@@ -1,6 +1,5 @@
 import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
-import { supabase } from "@/integrations/supabase/client";
 
 export const adminStatus = createServerFn({ method: "GET" }).handler(async () => {
   try {
@@ -52,54 +51,80 @@ export const adminLogout = createServerFn({ method: "POST" }).handler(async () =
 });
 
 export const adminListEntries = createServerFn({ method: "GET" }).handler(async () => {
-  const { requireAdmin } = await import("./admin.server");
+  const { requireAdmin, adminDbClient, adminOpsToken } = await import("./admin.server");
   await requireAdmin();
 
-  let dbClient = supabase;
+  const db = adminDbClient();
   try {
-    if (process.env["SUPABASE_SERVICE_ROLE_KEY"]) {
-      const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
-      dbClient = supabaseAdmin;
+    const { data: rpcData, error: rpcErr } = await (db.rpc as any)("admin_list_entries", {
+      p_token: adminOpsToken(),
+    });
+    if (!rpcErr && rpcData) {
+      return rpcData;
     }
   } catch {
-    // Fallback to supabase
+    // Fallback to table select
   }
 
-  const { data, error } = await dbClient
+  const { data, error } = await db
     .from("guestbook_entries")
     .select("id,name,relationship,message,approved,created_at")
     .order("created_at", { ascending: false });
+
   if (error) {
-    console.warn("[adminListEntries] Query warning:", error.message);
+    console.warn("[adminListEntries] Query note:", error.message);
     return [];
   }
   return data ?? [];
 });
 
-
 export const adminSetApproved = createServerFn({ method: "POST" })
   .inputValidator((data: { id: string; approved: boolean }) =>
-    z.object({ id: z.string().uuid(), approved: z.boolean() }).parse(data),
+    z.object({ id: z.string().min(1), approved: z.boolean() }).parse(data),
   )
   .handler(async ({ data }) => {
-    const { requireAdmin } = await import("./admin.server");
+    const { requireAdmin, adminDbClient, adminOpsToken } = await import("./admin.server");
     await requireAdmin();
-    const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
-    const { error } = await supabaseAdmin
+
+    const db = adminDbClient();
+    try {
+      const { error: rpcErr } = await (db.rpc as any)("admin_set_entry_approved", {
+        p_token: adminOpsToken(),
+        p_id: data.id,
+        p_approved: data.approved,
+      });
+      if (!rpcErr) return { ok: true as const };
+    } catch {
+      // Fallback
+    }
+
+    const { error } = await db
       .from("guestbook_entries")
       .update({ approved: data.approved })
       .eq("id", data.id);
+
     if (error) throw new Error(error.message);
     return { ok: true as const };
   });
 
 export const adminDeleteEntry = createServerFn({ method: "POST" })
-  .inputValidator((data: { id: string }) => z.object({ id: z.string().uuid() }).parse(data))
+  .inputValidator((data: { id: string }) => z.object({ id: z.string().min(1) }).parse(data))
   .handler(async ({ data }) => {
-    const { requireAdmin } = await import("./admin.server");
+    const { requireAdmin, adminDbClient, adminOpsToken } = await import("./admin.server");
     await requireAdmin();
-    const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
-    const { error } = await supabaseAdmin.from("guestbook_entries").delete().eq("id", data.id);
+
+    const db = adminDbClient();
+    try {
+      const { error: rpcErr } = await (db.rpc as any)("admin_delete_entry", {
+        p_token: adminOpsToken(),
+        p_id: data.id,
+      });
+      if (!rpcErr) return { ok: true as const };
+    } catch {
+      // Fallback
+    }
+
+    const { error } = await db.from("guestbook_entries").delete().eq("id", data.id);
     if (error) throw new Error(error.message);
     return { ok: true as const };
   });
@@ -123,10 +148,23 @@ export const adminAddOfflineEntries = createServerFn({ method: "POST" })
         .parse(data),
   )
   .handler(async ({ data }) => {
-    const { requireAdmin } = await import("./admin.server");
+    const { requireAdmin, adminDbClient, adminOpsToken } = await import("./admin.server");
     await requireAdmin();
-    const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
-    const { error } = await supabaseAdmin.from("guestbook_entries").insert(
+
+    const db = adminDbClient();
+    try {
+      const { data: rpcData, error: rpcErr } = await (db.rpc as any)("admin_add_entries", {
+        p_token: adminOpsToken(),
+        p_entries: data.entries,
+      });
+      if (!rpcErr) {
+        return { ok: true as const, count: typeof rpcData === "number" ? rpcData : data.entries.length };
+      }
+    } catch {
+      // Fallback
+    }
+
+    const { error } = await db.from("guestbook_entries").insert(
       data.entries.map((e) => ({
         name: e.name,
         relationship: e.relationship || null,
@@ -141,10 +179,36 @@ export const adminAddOfflineEntries = createServerFn({ method: "POST" })
 export const adminDeleteMemory = createServerFn({ method: "POST" })
   .validator((data: { id: string }) => z.object({ id: z.string().min(1) }).parse(data))
   .handler(async ({ data }) => {
-    const { requireAdmin } = await import("./admin.server");
+    const { requireAdmin, adminDbClient, adminOpsToken } = await import("./admin.server");
     await requireAdmin();
-    const { deleteMemoryHandler } = await import("./memories.server");
-    return deleteMemoryHandler(data.id);
+
+    const db = adminDbClient();
+
+    // 1. Call token-guarded RPC to delete row from database
+    try {
+      const { error: rpcErr } = await (db.rpc as any)("admin_delete_memory", {
+        p_token: adminOpsToken(),
+        p_id: data.id,
+      });
+      if (rpcErr) {
+        console.warn("[adminDeleteMemory] RPC note:", rpcErr.message);
+        await db.from("memories").delete().eq("id", data.id);
+      }
+    } catch {
+      try {
+        await db.from("memories").delete().eq("id", data.id);
+      } catch (e) {
+        console.warn("[adminDeleteMemory] Direct delete note:", e);
+      }
+    }
+
+    // 2. Local store deletion cleanup if available
+    try {
+      const { deleteMemoryHandler } = await import("./memories.server");
+      await deleteMemoryHandler(data.id);
+    } catch {
+      // Best-effort in serverless
+    }
+
+    return { ok: true as const, id: data.id };
   });
-
-

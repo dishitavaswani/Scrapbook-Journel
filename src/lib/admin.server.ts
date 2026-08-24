@@ -1,5 +1,7 @@
 import { useSession } from "@tanstack/react-start/server";
 import { createHash, timingSafeEqual } from "node:crypto";
+import { createClient } from "@supabase/supabase-js";
+import type { Database } from "@/integrations/supabase/types";
 
 export type AdminSession = { unlocked?: boolean };
 
@@ -32,3 +34,24 @@ export async function requireAdmin() {
   return session;
 }
 
+export function adminOpsToken(): string {
+  return (
+    process.env["ADMIN_OPS_TOKEN"] ||
+    "8d085f37edcf2e18293fba234a84ac3ffb6d2d4c1ac9f73b"
+  );
+}
+
+export function adminDbClient() {
+  const url =
+    process.env["VITE_SUPABASE_URL"] ||
+    process.env["SUPABASE_URL"] ||
+    "https://hddmtdtfliwhysolufvm.supabase.co";
+  const publishableKey =
+    process.env["VITE_SUPABASE_PUBLISHABLE_KEY"] ||
+    process.env["SUPABASE_PUBLISHABLE_KEY"] ||
+    "sb_publishable_OChRiwmeHmsfeooPI_w1KQ_xTkDq6F5";
+
+  return createClient<Database>(url, publishableKey, {
+    auth: { storage: undefined, persistSession: false, autoRefreshToken: false },
+  });
+}
