@@ -236,8 +236,23 @@ export function Guestbook() {
         setFormStatus("sent");
         setForm({ name: "", relationship: "", message: "" });
         handleRemovePhoto();
-        setLetters((prev) => [res.letter as PublicLetter, ...prev]);
-        await refreshLetters();
+        
+        try {
+          const latest = await fetchPublicLetters();
+          if (Array.isArray(latest) && latest.length > 0) {
+            setLetters(latest as PublicLetter[]);
+          } else {
+            setLetters((prev) => [
+              res.letter as PublicLetter,
+              ...prev.filter((l) => l.id !== res.letter.id),
+            ]);
+          }
+        } catch {
+          setLetters((prev) => [
+            res.letter as PublicLetter,
+            ...prev.filter((l) => l.id !== res.letter.id),
+          ]);
+        }
 
         setTimeout(() => {
           setFormStatus("idle");

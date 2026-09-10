@@ -102,6 +102,18 @@ export function writeLocalLetters(items: StoredLetter[]) {
   }
 }
 
+async function getLettersDbClient() {
+  if (process.env["SUPABASE_SERVICE_ROLE_KEY"] && process.env["SUPABASE_URL"]) {
+    try {
+      const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+      return supabaseAdmin;
+    } catch (e) {
+      console.warn("[getLettersDbClient] Falling back to standard supabase client:", e);
+    }
+  }
+  return supabase;
+}
+
 export async function fetchAllLetters(): Promise<StoredLetter[]> {
   const localList = readLocalLetters();
   const deletedIds = getDeletedLetterIds();
@@ -116,13 +128,16 @@ export async function fetchAllLetters(): Promise<StoredLetter[]> {
 
   // Also query Supabase if available
   try {
-    const { data: remoteData, error } = await supabase
+    const db = await getLettersDbClient();
+    const { data: remoteData, error } = await db
       .from("guestbook_entries")
       .select("id,name,relationship,message,photo_storage_path,approved,created_at")
       .order("created_at", { ascending: false })
       .limit(200);
 
-    if (!error && remoteData) {
+    if (error) {
+      console.warn("[fetchAllLetters] Supabase fetch error:", error.message);
+    } else if (remoteData) {
       for (const r of remoteData) {
         if (!deletedIds.has(r.id)) {
           const existing = map.get(r.id);
@@ -139,7 +154,7 @@ export async function fetchAllLetters(): Promise<StoredLetter[]> {
       }
     }
   } catch (err) {
-    console.warn("[fetchAllLetters] Supabase fetch note:", err);
+    console.warn("[fetchAllLetters] Supabase fetch exception:", err);
   }
 
   const all = Array.from(map.values());
@@ -186,8 +201,9 @@ export async function resolveLetterPhotoUrl(storagePath?: string | null): Promis
 
 export async function syncLetterToSupabase(letter: StoredLetter, action: "insert" | "delete") {
   try {
+    const db = await getLettersDbClient();
     if (action === "insert") {
-      await supabase.from("guestbook_entries").insert({
+      const { error } = await db.from("guestbook_entries").insert({
         id: letter.id,
         name: letter.name,
         relationship: letter.relationship,
@@ -196,11 +212,19 @@ export async function syncLetterToSupabase(letter: StoredLetter, action: "insert
         approved: letter.approved,
         created_at: letter.createdAt,
       });
+      if (error) {
+        console.error("[syncLetterToSupabase] INSERT error:", error.message, error);
+      } else {
+        console.log("[syncLetterToSupabase] Successfully inserted letter ID:", letter.id);
+      }
     } else if (action === "delete") {
-      await supabase.from("guestbook_entries").delete().eq("id", letter.id);
+      const { error } = await db.from("guestbook_entries").delete().eq("id", letter.id);
+      if (error) {
+        console.error("[syncLetterToSupabase] DELETE error:", error.message);
+      }
     }
   } catch (err) {
-    console.warn("[syncLetterToSupabase] Supabase sync note:", err);
+    console.warn("[syncLetterToSupabase] Supabase sync exception:", err);
   }
 }
 
@@ -214,10 +238,12 @@ export async function deleteLetterHandler(id: string) {
 
   let photoPath = target?.photoStoragePath;
 
+  const db = await getLettersDbClient();
+
   // If not found in local, check Supabase
   if (!photoPath) {
     try {
-      const { data: row } = await supabase
+      const { data: row } = await db
         .from("guestbook_entries")
         .select("photo_storage_path")
         .eq("id", id)
@@ -238,24 +264,11 @@ export async function deleteLetterHandler(id: string) {
   // Delete from Supabase Storage and Database
   try {
     if (photoPath) {
-      await supabase.storage.from("guestbook-photos").remove([photoPath]);
+      await db.storage.from("guestbook-photos").remove([photoPath]);
     }
-    await supabase.from("guestbook_entries").delete().eq("id", id);
+    await db.from("guestbook_entries").delete().eq("id", id);
   } catch (err) {
     console.warn("[deleteLetterHandler] Supabase delete note:", err);
-  }
-
-  // Admin service role fallback if present
-  try {
-    if (process.env["SUPABASE_SERVICE_ROLE_KEY"]) {
-      const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
-      if (photoPath) {
-        await supabaseAdmin.storage.from("guestbook-photos").remove([photoPath]);
-      }
-      await supabaseAdmin.from("guestbook_entries").delete().eq("id", id);
-    }
-  } catch {
-    // Ignore
   }
 
   return { ok: true as const, id };

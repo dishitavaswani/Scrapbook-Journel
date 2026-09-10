@@ -7,15 +7,15 @@ export const listPublicLetters = createServerFn({ method: "GET" }).handler(async
   const letters = await fetchAllLetters();
 
   // Return ONLY public metadata (name, relationship, id, createdAt) — NEVER return message or private photo!
-  const publicList = letters
-    .filter((l) => l.approved !== false)
-    .map((l) => ({
-      id: l.id,
-      name: l.name,
-      relationship: l.relationship,
-      createdAt: l.createdAt,
-    }));
+  // All submitted letters appear in the list waiting for her without exposing private content
+  const publicList = letters.map((l) => ({
+    id: l.id,
+    name: l.name,
+    relationship: l.relationship,
+    createdAt: l.createdAt,
+  }));
 
+  console.log(`[listPublicLetters] Returning ${publicList.length} public letter metadata records`);
   return publicList;
 });
 
