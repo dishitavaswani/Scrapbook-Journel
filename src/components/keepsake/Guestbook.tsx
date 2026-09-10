@@ -21,6 +21,7 @@ export type FullLetter = {
   name: string;
   relationship: string | null;
   message: string;
+  photoUrl?: string | null;
   createdAt: string;
 };
 
@@ -41,8 +42,11 @@ export function Guestbook() {
 
   const [letters, setLetters] = useState<PublicLetter[]>([]);
   const [form, setForm] = useState({ name: "", relationship: "", message: "" });
+  const [photoFile, setPhotoFile] = useState<File | null>(null);
+  const [photoPreview, setPhotoPreview] = useState<string | null>(null);
   const [formError, setFormError] = useState<string | null>(null);
   const [formStatus, setFormStatus] = useState<"idle" | "sending" | "sent">("idle");
+  const photoInputRef = useRef<HTMLInputElement>(null);
 
   // Read status tracking
   const [readLetterIds, setReadLetterIds] = useState<Set<string>>(new Set());
@@ -56,6 +60,9 @@ export function Guestbook() {
   const [activeLetter, setActiveLetter] = useState<FullLetter | null>(null);
   const [activePasscode, setActivePasscode] = useState<string | null>(null);
   const [unlockBusy, setUnlockBusy] = useState(false);
+
+  // Lightbox expanded photo modal
+  const [lightboxPhotoUrl, setLightboxPhotoUrl] = useState<string | null>(null);
 
   // Delete confirmation state
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
@@ -106,14 +113,14 @@ export function Guestbook() {
 
   // Lock body scroll when modal is open
   useEffect(() => {
-    if (modalMode !== "closed") {
+    if (modalMode !== "closed" || lightboxPhotoUrl !== null) {
       const original = document.body.style.overflow;
       document.body.style.overflow = "hidden";
       return () => {
         document.body.style.overflow = original;
       };
     }
-  }, [modalMode]);
+  }, [modalMode, lightboxPhotoUrl]);
 
   // Focus passcode input
   useEffect(() => {
@@ -129,10 +136,12 @@ export function Guestbook() {
 
   // Escape key handler
   useEffect(() => {
-    if (modalMode === "closed") return;
+    if (modalMode === "closed" && !lightboxPhotoUrl) return;
     function onKeyDown(e: KeyboardEvent) {
       if (e.key === "Escape") {
-        if (showDeleteConfirm) {
+        if (lightboxPhotoUrl) {
+          setLightboxPhotoUrl(null);
+        } else if (showDeleteConfirm) {
           setShowDeleteConfirm(false);
         } else {
           handleCloseModal();
@@ -141,7 +150,44 @@ export function Guestbook() {
     }
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [modalMode, showDeleteConfirm]);
+  }, [modalMode, showDeleteConfirm, lightboxPhotoUrl]);
+
+  // Photo selection handler
+  function handlePhotoSelect(file: File | null) {
+    if (!file) {
+      setPhotoFile(null);
+      setPhotoPreview(null);
+      return;
+    }
+
+    if (file.size > 8 * 1024 * 1024) {
+      setFormError("Photo exceeds maximum size of 8 MB");
+      return;
+    }
+
+    const validTypes = ["image/jpeg", "image/png", "image/webp", "image/jpg"];
+    if (!validTypes.includes(file.type)) {
+      setFormError("Please select a valid image (JPG, PNG, or WEBP)");
+      return;
+    }
+
+    setFormError(null);
+    setPhotoFile(file);
+
+    const reader = new FileReader();
+    reader.onload = () => {
+      setPhotoPreview(reader.result as string);
+    };
+    reader.readAsDataURL(file);
+  }
+
+  function handleRemovePhoto() {
+    setPhotoFile(null);
+    setPhotoPreview(null);
+    if (photoInputRef.current) {
+      photoInputRef.current.value = "";
+    }
+  }
 
   // Handle Form Submission
   async function onSubmit(e: FormEvent) {
@@ -155,31 +201,49 @@ export function Guestbook() {
       return;
     }
     if (!message) {
-      setFormError("Please write a birthday message");
+      setFormError("Please write your letter");
+      return;
+    }
+    if (message.length > 10000) {
+      setFormError("Letter cannot exceed 10,000 characters");
       return;
     }
 
     try {
       setFormStatus("sending");
+
+      let photoBase64: string | undefined;
+      if (photoFile) {
+        photoBase64 = await new Promise<string>((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = () => resolve(reader.result as string);
+          reader.onerror = () => reject(new Error("Failed to read photo file"));
+          reader.readAsDataURL(photoFile);
+        });
+      }
+
       const res = await executeSubmit({
         data: {
           name,
           relationship: form.relationship.trim() || undefined,
           message,
+          photoBase64,
+          photoName: photoFile?.name,
         },
       });
 
       if (res?.ok && res?.letter) {
         setFormStatus("sent");
         setForm({ name: "", relationship: "", message: "" });
+        handleRemovePhoto();
         setLetters((prev) => [res.letter as PublicLetter, ...prev]);
         await refreshLetters();
 
         setTimeout(() => {
           setFormStatus("idle");
-        }, 5000);
+        }, 6000);
       } else {
-        throw new Error("Could not submit note");
+        throw new Error("Could not submit letter");
       }
     } catch (err: any) {
       setFormStatus("idle");
@@ -202,6 +266,7 @@ export function Guestbook() {
     setPasscode("");
     setPasscodeError(null);
     setShowDeleteConfirm(false);
+    setLightboxPhotoUrl(null);
   }
 
   // Submit Passcode to Unlock Letter
@@ -265,44 +330,105 @@ export function Guestbook() {
       <p className="eyebrow text-center">Leave something behind</p>
       <h2 className="mt-3 text-center text-3xl text-ink">Letters left for her ✦</h2>
       <p className="mx-auto mt-3 max-w-md text-center text-sm text-muted-foreground">
-        Write her a birthday note. Your message remains private — only she can open and read it.
+        Write her a personal letter or birthday note. Your words and photos remain private — only she can open and read them.
       </p>
 
-      {/* Guestbook Form */}
-      <form onSubmit={onSubmit} className="paper hairline mx-auto mt-10 max-w-xl rounded-sm p-7">
+      {/* Guestbook / Private Letter Form */}
+      <form onSubmit={onSubmit} className="paper hairline mx-auto mt-10 max-w-xl rounded-sm p-7 space-y-4">
         <div className="grid gap-4 sm:grid-cols-2">
-          <input
-            className={field}
-            placeholder="Your name"
-            maxLength={60}
-            value={form.name}
-            onChange={(e) => setForm({ ...form, name: e.target.value })}
-          />
-          <input
-            className={field}
-            placeholder="How you know her (optional)"
-            maxLength={60}
-            value={form.relationship}
-            onChange={(e) => setForm({ ...form, relationship: e.target.value })}
+          <div>
+            <label className="mb-1 block text-xs font-medium text-muted-foreground">NAME *</label>
+            <input
+              className={field}
+              placeholder="Your name"
+              maxLength={60}
+              value={form.name}
+              onChange={(e) => setForm({ ...form, name: e.target.value })}
+            />
+          </div>
+          <div>
+            <label className="mb-1 block text-xs font-medium text-muted-foreground">HOW YOU KNOW HER (OPTIONAL)</label>
+            <input
+              className={field}
+              placeholder="Sister / Friend / Colleague…"
+              maxLength={60}
+              value={form.relationship}
+              onChange={(e) => setForm({ ...form, relationship: e.target.value })}
+            />
+          </div>
+        </div>
+
+        <div>
+          <div className="mb-1 flex items-center justify-between">
+            <label className="block text-xs font-medium text-muted-foreground">YOUR LETTER *</label>
+            <span
+              className={`text-xs font-mono ${
+                form.message.length > 10000 ? "text-destructive font-semibold" : "text-muted-foreground"
+              }`}
+            >
+              {form.message.length} / 10000
+            </span>
+          </div>
+          <textarea
+            className={`${field} min-h-56 resize-y leading-relaxed font-serif text-base`}
+            placeholder={"Dear Praju,\n\nI wanted to write you this letter on your thirty-fifth birthday..."}
+            maxLength={10000}
+            value={form.message}
+            onChange={(e) => setForm({ ...form, message: e.target.value })}
           />
         </div>
-        <textarea
-          className={`${field} mt-4 min-h-32 resize-none leading-relaxed font-serif`}
-          placeholder="Your birthday message…"
-          maxLength={1000}
-          value={form.message}
-          onChange={(e) => setForm({ ...form, message: e.target.value })}
-        />
-        <div className="mt-4 flex flex-wrap items-center justify-between gap-4">
+
+        {/* Photo Upload Section */}
+        <div className="rounded-sm border border-border/60 bg-muted/10 p-4">
+          <div className="flex items-center justify-between">
+            <label className="block text-xs font-semibold uppercase tracking-[0.16em] text-muted-foreground">
+              PHOTO (OPTIONAL)
+            </label>
+            <span className="text-[0.65rem] text-muted-foreground">JPG, PNG, WEBP · Max 8 MB</span>
+          </div>
+
+          <div className="mt-3 flex flex-wrap items-center gap-4">
+            <label className="cursor-pointer inline-flex items-center gap-2 rounded-sm border border-input bg-background px-4 py-2 text-xs uppercase tracking-[0.16em] text-foreground transition-colors hover:bg-accent">
+              <span>CHOOSE PHOTO</span>
+              <input
+                ref={photoInputRef}
+                type="file"
+                accept="image/jpeg,image/png,image/webp,image/jpg"
+                onChange={(e) => handlePhotoSelect(e.target.files?.[0] ?? null)}
+                className="hidden"
+              />
+            </label>
+
+            {photoPreview && (
+              <div className="flex items-center gap-3 animate-in fade-in-0 duration-200">
+                <img
+                  src={photoPreview}
+                  alt="Selected preview"
+                  className="h-14 w-14 rounded-sm object-cover border border-gold/40 shadow-sm"
+                />
+                <button
+                  type="button"
+                  onClick={handleRemovePhoto}
+                  className="text-xs uppercase tracking-[0.16em] text-destructive hover:underline cursor-pointer"
+                >
+                  REMOVE PHOTO
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* Status / Submit Row */}
+        <div className="mt-6 flex flex-wrap items-center justify-between gap-4 pt-2 border-t border-border/40">
           <p className="text-xs text-muted-foreground">
             {formError ? (
-              <span className="text-destructive">{formError}</span>
+              <span className="text-destructive font-medium">{formError}</span>
             ) : formStatus === "sent" ? (
               <span className="text-gold font-medium">
                 Thank you — your letter has been sealed and left for her ✦
               </span>
             ) : (
-              `${form.message.length}/1000 · Sealed with love`
+              "Sealed with love · Private to Praju"
             )}
           </p>
           <button
@@ -310,7 +436,7 @@ export function Guestbook() {
             disabled={formStatus === "sending"}
             className={btn}
           >
-            {formStatus === "sending" ? "Sealing…" : "Sign the book"}
+            {formStatus === "sending" ? "Sealing Letter…" : "ADD LETTER"}
           </button>
         </div>
       </form>
@@ -332,7 +458,7 @@ export function Guestbook() {
               “No letters yet.”
             </p>
             <p className="mt-1.5 text-xs text-muted-foreground">
-              Be the first to sign the book and leave a private birthday letter above.
+              Be the first to leave a private birthday letter for Praju above.
             </p>
           </div>
         ) : (
@@ -386,12 +512,11 @@ export function Guestbook() {
         )}
       </div>
 
-
       {/* =================================================================== */}
       {/* 1. PASSCODE MODAL — PRIVATE LETTER ACCESS                           */}
       {/* =================================================================== */}
       {modalMode === "passcode" && selectedLetter && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-[3px] px-4 transition-all animate-in fade-in-0 duration-200">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-[4px] px-4 transition-all animate-in fade-in-0 duration-200">
           <div
             className={`paper hairline w-full max-w-sm rounded-sm p-8 shadow-2xl transition-all duration-300 ${
               isShaking ? "animate-shake" : ""
@@ -452,13 +577,13 @@ export function Guestbook() {
       {/* 2. FULL LETTER READING MODAL (AFTER CORRECT PASSCODE)               */}
       {/* =================================================================== */}
       {modalMode === "reading" && activeLetter && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/65 backdrop-blur-[4px] p-4 sm:p-6 transition-all animate-in fade-in-0 duration-300">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-[4px] p-4 sm:p-6 transition-all animate-in fade-in-0 duration-300">
           <div className="paper hairline relative flex flex-col w-full max-w-2xl max-h-[90vh] rounded-sm p-6 sm:p-10 shadow-2xl overflow-hidden transition-all duration-300 animate-in zoom-in-95 duration-200">
-            {/* Top Close Button */}
-            <div className="flex items-center justify-between border-b border-border/50 pb-4 mb-6">
+            {/* Top Header */}
+            <div className="flex items-center justify-between border-b border-border/50 pb-4 mb-4">
               <div>
                 <p className="eyebrow text-[0.65rem] tracking-[0.24em] text-gold uppercase">
-                  LETTER FROM
+                  FROM {activeLetter.name.toUpperCase()}
                 </p>
                 <h3 className="font-serif text-2xl sm:text-3xl text-ink">
                   {activeLetter.name}
@@ -480,18 +605,36 @@ export function Guestbook() {
             </div>
 
             {/* Letter Body (Scrollable) */}
-            <div className="flex-1 overflow-y-auto pr-2 space-y-4 font-serif text-lg sm:text-xl text-ink/90 leading-relaxed whitespace-pre-line my-4">
-              <p className="italic text-ink font-serif">Dear Arohi,</p>
-              <div className="pt-2">{activeLetter.message}</div>
-              <p className="pt-4 font-serif italic text-gold">
-                With love,
-                <br />
-                {activeLetter.name}
-              </p>
+            <div className="flex-1 overflow-y-auto pr-2 space-y-6 my-2">
+              {/* Attached Photo Display */}
+              {activeLetter.photoUrl && (
+                <div className="pt-2 pb-4 text-center">
+                  <img
+                    src={activeLetter.photoUrl}
+                    alt={`Photo from ${activeLetter.name}`}
+                    onClick={() => setLightboxPhotoUrl(activeLetter.photoUrl ?? null)}
+                    className="max-h-80 w-auto max-w-full mx-auto rounded-sm object-contain border border-border/60 shadow-md cursor-zoom-in hover:opacity-95 transition-opacity"
+                  />
+                  <p className="mt-1.5 text-[0.65rem] uppercase tracking-[0.16em] text-muted-foreground italic font-sans">
+                    Click photo to view full size
+                  </p>
+                </div>
+              )}
+
+              {/* Letter Greeting & Paragraphs */}
+              <div className="space-y-4 font-serif text-lg sm:text-xl text-ink/90 leading-relaxed whitespace-pre-line">
+                <p className="italic text-ink font-serif text-xl sm:text-2xl">Dear Praju,</p>
+                <div className="pt-2 leading-relaxed">{activeLetter.message}</div>
+                <p className="pt-6 font-serif italic text-gold text-xl">
+                  With love,
+                  <br />
+                  {activeLetter.name}
+                </p>
+              </div>
             </div>
 
             {/* Bottom Actions */}
-            <div className="mt-6 flex items-center justify-between border-t border-border/50 pt-5">
+            <div className="mt-4 flex items-center justify-between border-t border-border/50 pt-4">
               <button
                 type="button"
                 onClick={() => setShowDeleteConfirm(true)}
@@ -516,7 +659,7 @@ export function Guestbook() {
                   <p className="eyebrow text-destructive text-[0.65rem]">CONFIRM</p>
                   <h4 className="mt-1 font-serif text-xl text-ink">Remove this letter?</h4>
                   <p className="mt-2 text-xs text-muted-foreground">
-                    This cannot be undone.
+                    This will permanently delete this letter and its attached photograph. This cannot be undone.
                   </p>
 
                   <div className="mt-6 flex justify-end gap-3 border-t border-border/40 pt-4">
@@ -540,6 +683,29 @@ export function Guestbook() {
                 </div>
               </div>
             )}
+          </div>
+        </div>
+      )}
+
+      {/* Lightbox Full Photo Modal */}
+      {lightboxPhotoUrl && (
+        <div
+          onClick={() => setLightboxPhotoUrl(null)}
+          className="fixed inset-0 z-[60] flex items-center justify-center bg-black/90 p-4 cursor-zoom-out animate-in fade-in-0 duration-200"
+        >
+          <div className="relative max-w-4xl max-h-[90vh]">
+            <img
+              src={lightboxPhotoUrl}
+              alt="Enlarged view"
+              className="max-h-[85vh] max-w-full rounded-sm object-contain shadow-2xl"
+            />
+            <button
+              type="button"
+              onClick={() => setLightboxPhotoUrl(null)}
+              className="absolute -top-10 right-0 text-white/80 hover:text-white text-xs uppercase tracking-[0.2em] p-2"
+            >
+              ✕ CLOSE
+            </button>
           </div>
         </div>
       )}

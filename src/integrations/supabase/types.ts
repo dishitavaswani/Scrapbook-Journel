@@ -21,6 +21,7 @@ export type Database = {
           id: string
           message: string
           name: string
+          photo_storage_path: string | null
           relationship: string | null
         }
         Insert: {
@@ -29,6 +30,7 @@ export type Database = {
           id?: string
           message: string
           name: string
+          photo_storage_path?: string | null
           relationship?: string | null
         }
         Update: {
@@ -37,6 +39,7 @@ export type Database = {
           id?: string
           message?: string
           name?: string
+          photo_storage_path?: string | null
           relationship?: string | null
         }
         Relationships: []

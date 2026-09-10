@@ -3,6 +3,7 @@ import { useServerFn } from "@tanstack/react-start";
 import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import {
+  adminAddLetter,
   adminAddOfflineEntries,
   adminDeleteEntry,
   adminDeleteMemory,
@@ -41,6 +42,8 @@ type Entry = {
   name: string;
   relationship: string | null;
   message: string;
+  photo_storage_path?: string | null;
+  photoUrl?: string | null;
   approved: boolean;
   created_at: string;
 };
@@ -61,6 +64,7 @@ function Admin() {
   const listEntries = useServerFn(adminListEntries);
   const setApproved = useServerFn(adminSetApproved);
   const deleteEntry = useServerFn(adminDeleteEntry);
+  const executeAddLetter = useServerFn(adminAddLetter);
   const addOffline = useServerFn(adminAddOfflineEntries);
   const deleteMemory = useServerFn(adminDeleteMemory);
   const fetchMemories = useServerFn(listMemories);
@@ -71,10 +75,22 @@ function Admin() {
   const [loginError, setLoginError] = useState(false);
   const [entries, setEntries] = useState<Entry[]>([]);
   const [memories, setMemories] = useState<Memory[]>([]);
+
+  // Manual single letter entry state
+  const [letterName, setLetterName] = useState("");
+  const [letterRelationship, setLetterRelationship] = useState("");
+  const [letterMessage, setLetterMessage] = useState("");
+  const [letterPhotoFile, setLetterPhotoFile] = useState<File | null>(null);
+  const [letterPhotoPreview, setLetterPhotoPreview] = useState<string | null>(null);
+  const [letterBusy, setLetterBusy] = useState(false);
+  const [letterNote, setLetterNote] = useState<string | null>(null);
+  const letterFileInputRef = useRef<HTMLInputElement>(null);
+
+  // Bulk offline importer state
   const [bulk, setBulk] = useState("");
   const [bulkNote, setBulkNote] = useState<string | null>(null);
 
-  // Admin photo upload state
+  // Admin memory photo upload state
   const [photoCaption, setPhotoCaption] = useState("");
   const [photoAddedBy, setPhotoAddedBy] = useState("");
   const [photoFile, setPhotoFile] = useState<File | null>(null);
@@ -111,6 +127,86 @@ function Admin() {
     void load();
   }
 
+  function handleLetterPhotoSelect(file: File | null) {
+    if (!file) {
+      setLetterPhotoFile(null);
+      setLetterPhotoPreview(null);
+      return;
+    }
+
+    if (file.size > 8 * 1024 * 1024) {
+      setLetterNote("Photo is too large (maximum 8 MB)");
+      return;
+    }
+
+    setLetterPhotoFile(file);
+    const reader = new FileReader();
+    reader.onload = () => setLetterPhotoPreview(reader.result as string);
+    reader.readAsDataURL(file);
+    setLetterNote(null);
+  }
+
+  function handleRemoveLetterPhoto() {
+    setLetterPhotoFile(null);
+    setLetterPhotoPreview(null);
+    if (letterFileInputRef.current) letterFileInputRef.current.value = "";
+  }
+
+  async function onAddSingleLetter(e: FormEvent) {
+    e.preventDefault();
+    setLetterNote(null);
+
+    const name = letterName.trim();
+    const message = letterMessage.trim();
+    if (!name) {
+      setLetterNote("Please enter sender's name");
+      return;
+    }
+    if (!message) {
+      setLetterNote("Please enter the letter text");
+      return;
+    }
+    if (message.length > 10000) {
+      setLetterNote("Letter exceeds 10,000 character limit");
+      return;
+    }
+
+    try {
+      setLetterBusy(true);
+      let photoBase64: string | undefined;
+
+      if (letterPhotoFile) {
+        photoBase64 = await new Promise<string>((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = () => resolve(reader.result as string);
+          reader.onerror = () => reject(new Error("Failed to read photo"));
+          reader.readAsDataURL(letterPhotoFile);
+        });
+      }
+
+      await executeAddLetter({
+        data: {
+          name,
+          relationship: letterRelationship.trim() || undefined,
+          message,
+          photoBase64,
+          photoName: letterPhotoFile?.name,
+        },
+      });
+
+      setLetterBusy(false);
+      setLetterNote("Private letter added successfully ✦");
+      setLetterName("");
+      setLetterRelationship("");
+      setLetterMessage("");
+      handleRemoveLetterPhoto();
+      void load();
+    } catch (err: any) {
+      setLetterBusy(false);
+      setLetterNote(err?.message || "Failed to add letter");
+    }
+  }
+
   async function onBulk(e: FormEvent) {
     e.preventDefault();
     setBulkNote(null);
@@ -133,7 +229,7 @@ function Admin() {
       setBulk("");
       void load();
     } catch {
-      setBulkNote("Couldn't add those — check the format and length.");
+      setBulkNote("Couldn't add those — check the format and length (up to 10,000 characters).");
     }
   }
 
@@ -216,7 +312,7 @@ function Admin() {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="font-serif text-3xl text-ink">Keepsake Admin</h1>
-          <p className="mt-1 text-xs text-muted-foreground">Manage guestbook notes, memories, and scrapbook photos.</p>
+          <p className="mt-1 text-xs text-muted-foreground">Manage private letters, guestbook notes, memories, and scrapbook photos.</p>
         </div>
         <div className="flex items-center gap-3">
           <a href="/" className={ghost}>
@@ -234,44 +330,222 @@ function Admin() {
         </div>
       </div>
 
-      {/* Guestbook Waiting Approval */}
+      {/* Add Single Private Letter Form */}
       <section className="mt-12">
+        <p className="eyebrow text-gold">Add Private Letter (Manual Entry)</p>
+        <form onSubmit={onAddSingleLetter} className="paper hairline mt-4 rounded-sm p-6 space-y-4">
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+            <div>
+              <label className="mb-1 block text-xs font-medium text-muted-foreground">Sender Name *</label>
+              <input
+                className={field}
+                placeholder="e.g. Kuhu, Shaurya, Aditi…"
+                maxLength={60}
+                value={letterName}
+                onChange={(e) => setLetterName(e.target.value)}
+              />
+            </div>
+            <div>
+              <label className="mb-1 block text-xs font-medium text-muted-foreground">Relationship / How they know her (optional)</label>
+              <input
+                className={field}
+                placeholder="e.g. Sister, Best Friend, Cousin…"
+                maxLength={60}
+                value={letterRelationship}
+                onChange={(e) => setLetterRelationship(e.target.value)}
+              />
+            </div>
+          </div>
+
+          <div>
+            <div className="mb-1 flex items-center justify-between">
+              <label className="block text-xs font-medium text-muted-foreground">Full Letter * (Up to 10,000 characters)</label>
+              <span className={`text-xs ${letterMessage.length > 10000 ? "text-destructive font-semibold" : "text-muted-foreground"}`}>
+                {letterMessage.length} / 10000
+              </span>
+            </div>
+            <textarea
+              className={`${field} min-h-48 resize-y font-serif leading-relaxed text-sm`}
+              placeholder={"Dear Praju,\n\nI wanted to write you this letter..."}
+              maxLength={10000}
+              value={letterMessage}
+              onChange={(e) => setLetterMessage(e.target.value)}
+            />
+          </div>
+
+          {/* Photo Attachment */}
+          <div className="rounded-sm border border-border/60 bg-muted/10 p-4">
+            <label className="mb-2 block text-xs font-semibold uppercase tracking-[0.16em] text-muted-foreground">
+              Photo (Optional) · JPG, PNG, WEBP (Max 8 MB)
+            </label>
+            <div className="flex flex-wrap items-center gap-4">
+              <input
+                ref={letterFileInputRef}
+                type="file"
+                accept="image/jpeg,image/png,image/webp,image/jpg"
+                onChange={(e) => handleLetterPhotoSelect(e.target.files?.[0] ?? null)}
+                className="text-xs text-muted-foreground file:mr-3 file:rounded-sm file:border file:border-input file:bg-background file:px-3 file:py-1.5 file:text-xs file:uppercase file:tracking-[0.16em] file:text-foreground cursor-pointer"
+              />
+              {letterPhotoPreview && (
+                <div className="flex items-center gap-3">
+                  <img
+                    src={letterPhotoPreview}
+                    alt="Preview"
+                    className="h-16 w-16 rounded-sm object-cover border border-border shadow-sm"
+                  />
+                  <button
+                    type="button"
+                    onClick={handleRemoveLetterPhoto}
+                    className="text-xs uppercase tracking-[0.16em] text-destructive hover:underline cursor-pointer"
+                  >
+                    Remove Photo
+                  </button>
+                </div>
+              )}
+            </div>
+          </div>
+
+          <div className="flex items-center justify-between pt-2 border-t border-border/40">
+            <p className="text-xs text-muted-foreground">
+              {letterNote ? (
+                <span className={letterNote.includes("success") ? "text-gold font-medium" : "text-destructive"}>
+                  {letterNote}
+                </span>
+              ) : (
+                "Letters added here are approved and sealed into the private keepsake."
+              )}
+            </p>
+            <button type="submit" disabled={letterBusy} className={btn}>
+              {letterBusy ? "Saving…" : "Add Private Letter"}
+            </button>
+          </div>
+        </form>
+      </section>
+
+      {/* Guestbook Waiting Approval */}
+      <section className="mt-14">
         <p className="eyebrow">Waiting for approval ({pending.length})</p>
-        <div className="mt-4 space-y-3">
+        <div className="mt-4 space-y-4">
           {pending.length === 0 && <p className="text-sm text-muted-foreground">Nothing pending.</p>}
           {pending.map((e) => (
-            <article key={e.id} className="paper hairline rounded-sm p-5">
-              <p className="font-serif text-lg text-ink">“{e.message}”</p>
-              <p className="mt-2 eyebrow">
-                {e.name}
-                {e.relationship ? ` · ${e.relationship}` : ""}
-              </p>
-              <div className="mt-4 flex gap-2">
-                <button
-                  className={btn}
-                  onClick={async () => {
-                    await setApproved({ data: { id: e.id, approved: true } });
-                    void load();
-                  }}
-                >
-                  Approve
-                </button>
-                <button
-                  className={ghost}
-                  onClick={async () => {
-                    await deleteEntry({ data: { id: e.id } });
-                    void load();
-                  }}
-                >
-                  Delete
-                </button>
+            <article key={e.id} className="paper hairline rounded-sm p-6 space-y-3">
+              <div className="flex items-start justify-between">
+                <div>
+                  <h3 className="font-serif text-xl text-ink font-semibold">From {e.name}</h3>
+                  {e.relationship && (
+                    <p className="text-xs text-muted-foreground italic font-serif">{e.relationship}</p>
+                  )}
+                </div>
+                <span className="text-[0.65rem] uppercase tracking-[0.2em] px-2 py-0.5 rounded-sm bg-muted/40 text-muted-foreground">
+                  PENDING
+                </span>
+              </div>
+
+              {e.photoUrl && (
+                <div className="pt-2">
+                  <img
+                    src={e.photoUrl}
+                    alt={`Attached by ${e.name}`}
+                    className="max-h-48 max-w-xs rounded-sm object-cover border border-border shadow-sm"
+                  />
+                </div>
+              )}
+
+              <div className="font-serif text-base text-ink/90 leading-relaxed whitespace-pre-line py-2 border-y border-border/30">
+                {e.message}
+              </div>
+
+              <div className="flex items-center justify-between pt-2">
+                <p className="text-[0.7rem] text-muted-foreground">
+                  {new Date(e.created_at).toLocaleDateString("en-US", {
+                    month: "short",
+                    day: "numeric",
+                    year: "numeric",
+                  })}
+                </p>
+                <div className="flex gap-2">
+                  <button
+                    className={btn}
+                    onClick={async () => {
+                      await setApproved({ data: { id: e.id, approved: true } });
+                      void load();
+                    }}
+                  >
+                    Approve
+                  </button>
+                  <button
+                    className={ghost}
+                    onClick={async () => {
+                      if (!confirm(`Delete letter from ${e.name}?`)) return;
+                      await deleteEntry({ data: { id: e.id } });
+                      void load();
+                    }}
+                  >
+                    Delete
+                  </button>
+                </div>
               </div>
             </article>
           ))}
         </div>
       </section>
 
-      {/* Upload Photo to Scrapbook */}
+      {/* Approved Guestbook Messages & Letters */}
+      <section className="mt-14">
+        <p className="eyebrow">On the wall / Active Letters ({approved.length})</p>
+        <div className="mt-4 space-y-3">
+          {approved.length === 0 && <p className="text-sm text-muted-foreground">No approved letters.</p>}
+          {approved.map((e) => (
+            <div
+              key={e.id}
+              className="paper hairline rounded-sm p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-4"
+            >
+              <div className="flex items-center gap-3 overflow-hidden">
+                {e.photoUrl && (
+                  <img
+                    src={e.photoUrl}
+                    alt=""
+                    className="h-12 w-12 shrink-0 rounded-sm object-cover border border-border"
+                  />
+                )}
+                <div className="min-w-0">
+                  <p className="text-sm text-ink font-serif font-medium truncate">
+                    <span>From {e.name}</span>
+                    {e.relationship && <span className="text-xs text-muted-foreground ml-1.5 font-sans font-normal">({e.relationship})</span>}
+                  </p>
+                  <p className="text-xs text-muted-foreground font-serif truncate max-w-md">
+                    {e.message.slice(0, 100)}…
+                  </p>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-2 shrink-0">
+                <button
+                  className="text-xs uppercase tracking-[0.2em] text-muted-foreground hover:text-ink cursor-pointer px-2 py-1"
+                  onClick={async () => {
+                    await setApproved({ data: { id: e.id, approved: false } });
+                    void load();
+                  }}
+                >
+                  Hide
+                </button>
+                <button
+                  className="text-xs uppercase tracking-[0.2em] text-destructive hover:underline cursor-pointer px-2 py-1"
+                  onClick={async () => {
+                    if (!confirm(`Delete letter from ${e.name}? This will remove both the message and attached photo.`)) return;
+                    await deleteEntry({ data: { id: e.id } });
+                    void load();
+                  }}
+                >
+                  Delete ✕
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
+      </section>
+
+      {/* Upload Photo to Scrapbook Gallery */}
       <section className="mt-14">
         <p className="eyebrow">Add photo to memories gallery</p>
         <form onSubmit={onUploadPhoto} className="paper hairline mt-4 rounded-sm p-6 space-y-4">
@@ -320,9 +594,9 @@ function Admin() {
         </form>
       </section>
 
-      {/* Add Offline Guestbook Messages */}
+      {/* Add Offline Bulk Guestbook Messages */}
       <section className="mt-14">
-        <p className="eyebrow">Add messages collected offline</p>
+        <p className="eyebrow">Add messages collected offline (Bulk text importer)</p>
         <form onSubmit={onBulk} className="paper hairline mt-4 rounded-sm p-5">
           <textarea
             className={`${field} min-h-32 resize-none font-mono text-xs`}
@@ -332,39 +606,13 @@ function Admin() {
           />
           <div className="mt-4 flex items-center justify-between gap-4">
             <p className="text-xs text-muted-foreground">
-              {bulkNote ?? "One per line — Name | Their message. These go up approved."}
+              {bulkNote ?? "One per line — Name | Their message (up to 10,000 characters). These go up approved."}
             </p>
             <button type="submit" className={btn}>
               Add to the wall
             </button>
           </div>
         </form>
-      </section>
-
-      {/* Approved Guestbook Messages */}
-      <section className="mt-14">
-        <p className="eyebrow">On the wall ({approved.length})</p>
-        <div className="mt-4 space-y-2">
-          {approved.map((e) => (
-            <div
-              key={e.id}
-              className="hairline flex items-center justify-between gap-4 rounded-sm px-4 py-3"
-            >
-              <p className="truncate text-sm text-ink">
-                <span className="text-muted-foreground">{e.name}:</span> {e.message}
-              </p>
-              <button
-                className="shrink-0 text-xs uppercase tracking-[0.2em] text-muted-foreground hover:text-destructive cursor-pointer"
-                onClick={async () => {
-                  await setApproved({ data: { id: e.id, approved: false } });
-                  void load();
-                }}
-              >
-                Hide
-              </button>
-            </div>
-          ))}
-        </div>
       </section>
 
       {/* Photo Gallery Management */}
@@ -446,4 +694,3 @@ function Admin() {
     </main>
   );
 }
-
