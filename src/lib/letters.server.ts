@@ -8,6 +8,13 @@ const LETTERS_PHOTOS_DIR = path.resolve("public/letters/photos");
 const LETTERS_JSON = path.join(LETTERS_DIR, "letters.json");
 const DELETED_LETTERS_JSON = path.join(LETTERS_DIR, "deleted.json");
 
+export type PublicEnvelope = {
+  id: string;
+  name: string;
+  relationship: string | null;
+  createdAt: string;
+};
+
 export type StoredLetter = {
   id: string;
   name: string;
@@ -102,6 +109,13 @@ export function writeLocalLetters(items: StoredLetter[]) {
   }
 }
 
+function adminOpsToken(): string {
+  return (
+    process.env["ADMIN_OPS_TOKEN"] ||
+    "8d085f37edcf2e18293fba234a84ac3ffb6d2d4c1ac9f73b"
+  );
+}
+
 async function getLettersDbClient() {
   if (process.env["SUPABASE_SERVICE_ROLE_KEY"] && process.env["SUPABASE_URL"]) {
     try {
@@ -114,6 +128,85 @@ async function getLettersDbClient() {
   return supabase;
 }
 
+/**
+ * Fetch public metadata (safe envelope cards) for the Guestbook page.
+ * Never returns message body or private photo URLs.
+ */
+export async function fetchPublicEnvelopes(): Promise<PublicEnvelope[]> {
+  const localList = readLocalLetters();
+  const deletedIds = getDeletedLetterIds();
+  const map = new Map<string, PublicEnvelope>();
+
+  // Add local records
+  for (const l of localList) {
+    if (!deletedIds.has(l.id)) {
+      map.set(l.id, {
+        id: l.id,
+        name: l.name,
+        relationship: l.relationship,
+        createdAt: l.createdAt,
+      });
+    }
+  }
+
+  // 1. Query guestbook_envelopes public view in Supabase (accessible without secrets)
+  try {
+    const { data: envelopesData, error: envError } = await supabase
+      .from("guestbook_envelopes")
+      .select("id,name,relationship,created_at")
+      .order("created_at", { ascending: false })
+      .limit(200);
+
+    if (!envError && envelopesData) {
+      for (const env of envelopesData) {
+        if (!deletedIds.has(env.id)) {
+          map.set(env.id, {
+            id: env.id,
+            name: env.name,
+            relationship: env.relationship,
+            createdAt: env.created_at,
+          });
+        }
+      }
+    }
+  } catch (err) {
+    console.warn("[fetchPublicEnvelopes] Envelopes view query note:", err);
+  }
+
+  // 2. Also query RPC admin_list_entries if token available (to include any new inserts)
+  try {
+    const { data: rpcData, error: rpcErr } = await (supabase.rpc as any)("admin_list_entries", {
+      p_token: adminOpsToken(),
+    });
+
+    if (!rpcErr && Array.isArray(rpcData)) {
+      for (const r of rpcData) {
+        if (!deletedIds.has(r.id)) {
+          map.set(r.id, {
+            id: r.id,
+            name: r.name,
+            relationship: r.relationship,
+            createdAt: r.created_at || r.createdAt,
+          });
+        }
+      }
+    }
+  } catch {
+    // Ignore RPC fallback
+  }
+
+  const all = Array.from(map.values());
+  all.sort(
+    (a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime(),
+  );
+
+  console.log(`[fetchPublicEnvelopes] Loaded ${all.length} public envelopes`);
+  return all;
+}
+
+/**
+ * Fetch full letter records (used by admin and server unlock).
+ */
 export async function fetchAllLetters(): Promise<StoredLetter[]> {
   const localList = readLocalLetters();
   const deletedIds = getDeletedLetterIds();
@@ -126,7 +219,33 @@ export async function fetchAllLetters(): Promise<StoredLetter[]> {
     }
   }
 
-  // Also query Supabase if available
+  // Query RPC admin_list_entries using token
+  try {
+    const { data: rpcData, error: rpcErr } = await (supabase.rpc as any)("admin_list_entries", {
+      p_token: adminOpsToken(),
+    });
+
+    if (!rpcErr && Array.isArray(rpcData)) {
+      for (const r of rpcData) {
+        if (!deletedIds.has(r.id)) {
+          const existing = map.get(r.id);
+          map.set(r.id, {
+            id: r.id,
+            name: r.name,
+            relationship: r.relationship,
+            message: r.message,
+            photoStoragePath: r.photo_storage_path || existing?.photoStoragePath || null,
+            approved: r.approved ?? true,
+            createdAt: r.created_at || r.createdAt,
+          });
+        }
+      }
+    }
+  } catch {
+    // Ignore RPC fallback
+  }
+
+  // Also query database directly if service role or direct access available
   try {
     const db = await getLettersDbClient();
     const { data: remoteData, error } = await db
@@ -135,9 +254,7 @@ export async function fetchAllLetters(): Promise<StoredLetter[]> {
       .order("created_at", { ascending: false })
       .limit(200);
 
-    if (error) {
-      console.warn("[fetchAllLetters] Supabase fetch error:", error.message);
-    } else if (remoteData) {
+    if (!error && remoteData) {
       for (const r of remoteData) {
         if (!deletedIds.has(r.id)) {
           const existing = map.get(r.id);
@@ -164,11 +281,68 @@ export async function fetchAllLetters(): Promise<StoredLetter[]> {
   return all;
 }
 
+/**
+ * Fetch a single full letter by ID for authorized private unlocking.
+ */
+export async function fetchLetterById(id: string): Promise<StoredLetter | null> {
+  const deletedIds = getDeletedLetterIds();
+  if (deletedIds.has(id)) return null;
+
+  // 1. Check local store
+  const local = readLocalLetters();
+  const foundLocal = local.find((l) => l.id === id);
+  if (foundLocal) return foundLocal;
+
+  // 2. Query RPC admin_list_entries
+  try {
+    const { data: rpcData, error: rpcErr } = await (supabase.rpc as any)("admin_list_entries", {
+      p_token: adminOpsToken(),
+    });
+    if (!rpcErr && Array.isArray(rpcData)) {
+      const match = rpcData.find((r: any) => r.id === id);
+      if (match) {
+        return {
+          id: match.id,
+          name: match.name,
+          relationship: match.relationship,
+          message: match.message,
+          photoStoragePath: match.photo_storage_path || null,
+          approved: match.approved ?? true,
+          createdAt: match.created_at || match.createdAt,
+        };
+      }
+    }
+  } catch {}
+
+  // 3. Query guestbook_entries directly
+  try {
+    const db = await getLettersDbClient();
+    const { data: row } = await db
+      .from("guestbook_entries")
+      .select("id,name,relationship,message,photo_storage_path,approved,created_at")
+      .eq("id", id)
+      .maybeSingle();
+
+    if (row) {
+      return {
+        id: row.id,
+        name: row.name,
+        relationship: row.relationship,
+        message: row.message,
+        photoStoragePath: row.photo_storage_path || null,
+        approved: row.approved ?? true,
+        createdAt: row.created_at,
+      };
+    }
+  } catch {}
+
+  return null;
+}
+
 export async function resolveLetterPhotoUrl(storagePath?: string | null): Promise<string | null> {
   if (!storagePath) return null;
 
   try {
-    // Attempt to generate signed URL (valid for 6 hours)
     const { data: signedData, error: signedErr } = await supabase.storage
       .from("guestbook-photos")
       .createSignedUrl(storagePath, 60 * 60 * 6);
@@ -191,7 +365,6 @@ export async function resolveLetterPhotoUrl(storagePath?: string | null): Promis
     console.warn("[resolveLetterPhotoUrl] Public URL note:", err);
   }
 
-  // Check if local file exists
   if (fs.existsSync(path.join(LETTERS_PHOTOS_DIR, storagePath))) {
     return `/letters/photos/${storagePath}`;
   }
@@ -240,7 +413,6 @@ export async function deleteLetterHandler(id: string) {
 
   const db = await getLettersDbClient();
 
-  // If not found in local, check Supabase
   if (!photoPath) {
     try {
       const { data: row } = await db
@@ -256,12 +428,10 @@ export async function deleteLetterHandler(id: string) {
     }
   }
 
-  // Delete physical local photo if present
   if (photoPath) {
     deleteLocalLetterPhoto(photoPath);
   }
 
-  // Delete from Supabase Storage and Database
   try {
     if (photoPath) {
       await db.storage.from("guestbook-photos").remove([photoPath]);

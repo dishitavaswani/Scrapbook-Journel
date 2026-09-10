@@ -3,20 +3,9 @@ import { z } from "zod";
 import { supabase } from "@/integrations/supabase/client";
 
 export const listPublicLetters = createServerFn({ method: "GET" }).handler(async () => {
-  const { fetchAllLetters } = await import("./letters.server");
-  const letters = await fetchAllLetters();
-
-  // Return ONLY public metadata (name, relationship, id, createdAt) — NEVER return message or private photo!
-  // All submitted letters appear in the list waiting for her without exposing private content
-  const publicList = letters.map((l) => ({
-    id: l.id,
-    name: l.name,
-    relationship: l.relationship,
-    createdAt: l.createdAt,
-  }));
-
-  console.log(`[listPublicLetters] Returning ${publicList.length} public letter metadata records`);
-  return publicList;
+  const { fetchPublicEnvelopes } = await import("./letters.server");
+  const envelopes = await fetchPublicEnvelopes();
+  return envelopes;
 });
 
 export const submitLetter = createServerFn({ method: "POST" })
@@ -120,8 +109,7 @@ export const unlockPrivateLetter = createServerFn({ method: "POST" })
   .handler(async ({ data }) => {
     const {
       verifyJournalPasscode,
-      fetchAllLetters,
-      getDeletedLetterIds,
+      fetchLetterById,
       resolveLetterPhotoUrl,
     } = await import("./letters.server");
 
@@ -129,13 +117,7 @@ export const unlockPrivateLetter = createServerFn({ method: "POST" })
       throw new Error("Incorrect passcode. Try again.");
     }
 
-    const deletedIds = getDeletedLetterIds();
-    if (deletedIds.has(data.id)) {
-      throw new Error("This letter has been removed.");
-    }
-
-    const letters = await fetchAllLetters();
-    const letter = letters.find((l) => l.id === data.id);
+    const letter = await fetchLetterById(data.id);
     if (!letter) {
       throw new Error("Letter not found");
     }

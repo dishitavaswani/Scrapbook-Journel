@@ -44,6 +44,27 @@ export type Database = {
         }
         Relationships: []
       }
+      guestbook_envelopes: {
+        Row: {
+          created_at: string
+          id: string
+          name: string
+          relationship: string | null
+        }
+        Insert: {
+          created_at?: string
+          id?: string
+          name: string
+          relationship?: string | null
+        }
+        Update: {
+          created_at?: string
+          id?: string
+          name?: string
+          relationship?: string | null
+        }
+        Relationships: []
+      }
       memories: {
         Row: {
           added_by: string | null
@@ -70,7 +91,15 @@ export type Database = {
       }
     }
     Views: {
-      [_ in never]: never
+      guestbook_envelopes: {
+        Row: {
+          created_at: string
+          id: string
+          name: string
+          relationship: string | null
+        }
+        Relationships: []
+      }
     }
     Functions: {
       [_ in never]: never
